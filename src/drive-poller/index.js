@@ -9,7 +9,7 @@ const drive = google.drive({ version: 'v3' });
 const FOLDER_ID = process.env.FOLDER_ID;
 const DEST_BUCKET_NAME = process.env.DEST_BUCKET;
 const STATE_FILE_NAME = 'drive-poller-state.json';
-const MAX_VIDEO_DURATION_MS = 5 * 60 * 60 * 1000; // 5 hours in milliseconds
+const MAX_VIDEO_DURATION_MS = 3 * 60 * 60 * 1000; // 3 hours (Video Intelligence API max)
 
 /**
  * Cloud Function entry point.
