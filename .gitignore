@@ -1,0 +1,25 @@
+# Terraform
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.backup
+infra/.terraform.lock.hcl
+infra/dist/
+
+# Secrets - DO NOT COMMIT
+infra/terraform.tfvars
+
+# Node
+node_modules/
+package-lock.json
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Agent/Tool specific
+.agent/
+.kiro/
+.omc/
