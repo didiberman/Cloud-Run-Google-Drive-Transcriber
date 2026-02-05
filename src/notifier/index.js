@@ -3,13 +3,17 @@ const { google } = require('googleapis');
 const functions = require('@google-cloud/functions-framework');
 const { Readable } = require('stream');
 const { VertexAI } = require('@google-cloud/vertexai');
+const { GoogleAuth } = require('google-auth-library');
 
-// Initialize Vertex AI lazily to prevent startup crashes if env vars are missing
-let model = null;
+// Model configuration
+const MODEL_CONFIG_FILE = '_config/model.txt';
+const DEFAULT_MODEL = 'gemini-2.5-flash';
 
-function getAIModel() {
-    if (model) return model;
+// Lazy-initialized clients
+let vertexAI = null;
+let googleAuth = null;
 
+function getProjectConfig() {
     const projectId = process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
     const location = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1';
 
@@ -17,14 +21,93 @@ function getAIModel() {
         throw new Error('GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variable not set.');
     }
 
-    const vertexAI = new VertexAI({
-        project: projectId,
-        location: location
+    return { projectId, location };
+}
+
+function getVertexAI() {
+    if (vertexAI) return vertexAI;
+    const { projectId, location } = getProjectConfig();
+    vertexAI = new VertexAI({ project: projectId, location });
+    return vertexAI;
+}
+
+function getGoogleAuth() {
+    if (googleAuth) return googleAuth;
+    googleAuth = new GoogleAuth({
+        scopes: ['https://www.googleapis.com/auth/cloud-platform']
+    });
+    return googleAuth;
+}
+
+async function callClaudeOnVertex(prompt, modelId) {
+    const { projectId, location } = getProjectConfig();
+    const auth = getGoogleAuth();
+    const client = await auth.getClient();
+    const accessToken = await client.getAccessToken();
+
+    // Claude on Vertex AI endpoint
+    const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/anthropic/models/${modelId}:rawPredict`;
+
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${accessToken.token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            anthropic_version: 'vertex-2023-10-16',
+            max_tokens: 4096,
+            messages: [{
+                role: 'user',
+                content: prompt
+            }]
+        })
     });
 
-    // Instantiate the model
-    model = vertexAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-    return model;
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Claude API error: ${response.status} - ${errorText}`);
+    }
+
+    const result = await response.json();
+
+    // Extract text from Claude response
+    if (result.content && Array.isArray(result.content)) {
+        return result.content
+            .filter(block => block.type === 'text')
+            .map(block => block.text)
+            .join('');
+    }
+
+    throw new Error('Unexpected response structure from Claude');
+}
+
+async function analyzeWithModel(transcript, prompt, modelId) {
+    const fullPrompt = `${prompt}\n\nTranscript:\n${transcript}`;
+
+    // Determine if it's a Gemini or Claude model
+    if (modelId.startsWith('claude')) {
+        // Claude model via Vertex AI REST API
+        console.log(`Using Claude model: ${modelId}`);
+        return await callClaudeOnVertex(fullPrompt, modelId);
+
+    } else {
+        // Gemini model via Vertex AI SDK
+        console.log(`Using Gemini model: ${modelId}`);
+        const ai = getVertexAI();
+        const model = ai.getGenerativeModel({ model: modelId });
+
+        const result = await model.generateContent(fullPrompt);
+        const response = result.response;
+
+        // Extract text from Vertex AI response structure
+        if (response.candidates && response.candidates[0] && response.candidates[0].content) {
+            const parts = response.candidates[0].content.parts;
+            return parts.map(part => part.text).join('');
+        }
+
+        throw new Error('Unexpected response structure from Vertex AI');
+    }
 }
 
 const storage = new Storage();
@@ -73,8 +156,9 @@ functions.cloudEvent('sendNotification', async (cloudEvent) => {
 
         try {
             let promptContent = null;
+            let selectedModel = DEFAULT_MODEL;
 
-            // 1. First, try to load prompt from GCS (set via dashboard)
+            // 1. First, try to load settings from GCS (set via dashboard)
             try {
                 const [promptData] = await bucket.file(PROMPT_CONFIG_FILE).download();
                 const gcsPrompt = promptData.toString().trim();
@@ -85,6 +169,18 @@ functions.cloudEvent('sendNotification', async (cloudEvent) => {
             } catch (gcsErr) {
                 // No GCS prompt file, that's okay - fall back to Drive
                 console.log('No GCS prompt config found, checking Google Drive...');
+            }
+
+            // Load model selection from GCS
+            try {
+                const [modelData] = await bucket.file(MODEL_CONFIG_FILE).download();
+                const gcsModel = modelData.toString().trim();
+                if (gcsModel) {
+                    selectedModel = gcsModel;
+                    console.log(`Using dashboard-configured model: ${selectedModel}`);
+                }
+            } catch (modelErr) {
+                console.log(`No model config found, using default: ${DEFAULT_MODEL}`);
             }
 
             // 2. Fall back to Google Drive prompt if GCS is empty
@@ -100,8 +196,8 @@ functions.cloudEvent('sendNotification', async (cloudEvent) => {
             }
 
             if (promptContent) {
-                console.log('Found prompt template. Running AI analysis...');
-                analysisText = await analyzeTranscript(formattedTranscript, promptContent);
+                console.log(`Found prompt template. Running AI analysis with ${selectedModel}...`);
+                analysisText = await analyzeWithModel(formattedTranscript, promptContent, selectedModel);
                 console.log('AI Analysis complete.');
             } else {
                 console.log('No prompt template found. Skipping AI analysis.');
@@ -509,32 +605,6 @@ async function findPromptFile(folderId, fileNames) {
     }
 }
 
-/**
- * Runs the transcript through Vertex AI (Gemini) using the provided prompt.
- * @param {string} transcript 
- * @param {string} prompt 
- * @returns {Promise<string>} The analysis result
- */
-async function analyzeTranscript(transcript, prompt) {
-    try {
-        const aiModel = getAIModel();
-        const fullPrompt = `${prompt}\n\nTranscript:\n${transcript}`;
-
-        const result = await aiModel.generateContent(fullPrompt);
-        const response = result.response;
-
-        // Extract text from Vertex AI response structure
-        if (response.candidates && response.candidates[0] && response.candidates[0].content) {
-            const parts = response.candidates[0].content.parts;
-            return parts.map(part => part.text).join('');
-        }
-
-        throw new Error('Unexpected response structure from Vertex AI');
-    } catch (error) {
-        console.error("AI Analysis failed:", error);
-        throw error;
-    }
-}
 
 /**
  * Searches for a subfolder by name in the specified parent folder.

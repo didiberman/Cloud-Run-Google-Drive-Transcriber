@@ -7,6 +7,14 @@ const TRANSCRIPT_BUCKET = process.env.TRANSCRIPT_BUCKET;
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || 'tmptmp123';
 
 const PROMPT_CONFIG_FILE = '_config/prompt.txt';
+const MODEL_CONFIG_FILE = '_config/model.txt';
+
+const AVAILABLE_MODELS = [
+    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'google', description: 'Fast & cost-effective' },
+    { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'google', description: 'Most capable Gemini' },
+    { id: 'claude-sonnet-4@20250514', name: 'Claude Sonnet 4', provider: 'anthropic', description: 'Balanced performance' },
+    { id: 'claude-opus-4@20250115', name: 'Claude Opus 4', provider: 'anthropic', description: 'Most capable Claude' }
+];
 
 // Register HTTP function
 functions.http('dashboard', async (req, res) => {
@@ -40,23 +48,33 @@ functions.http('dashboard', async (req, res) => {
 
         const bucket = storage.bucket(TRANSCRIPT_BUCKET);
 
-        // Handle POST request to save prompt
-        if (req.method === 'POST' && req.body && req.body.action === 'savePrompt') {
+        // Handle POST request to save settings
+        if (req.method === 'POST' && req.body && req.body.action === 'saveSettings') {
             const promptContent = req.body.prompt || '';
-            await bucket.file(PROMPT_CONFIG_FILE).save(promptContent, {
-                contentType: 'text/plain; charset=utf-8'
-            });
-            return res.json({ success: true, message: 'Prompt saved successfully' });
+            const modelId = req.body.model || 'gemini-2.5-flash';
+
+            await Promise.all([
+                bucket.file(PROMPT_CONFIG_FILE).save(promptContent, { contentType: 'text/plain; charset=utf-8' }),
+                bucket.file(MODEL_CONFIG_FILE).save(modelId, { contentType: 'text/plain; charset=utf-8' })
+            ]);
+
+            return res.json({ success: true, message: 'Settings saved successfully' });
         }
 
-        // Load current prompt from GCS
+        // Load current settings from GCS
         let currentPrompt = '';
+        let currentModel = 'gemini-2.5-flash';
         try {
             const [promptData] = await bucket.file(PROMPT_CONFIG_FILE).download();
             currentPrompt = promptData.toString();
         } catch (e) {
             // No prompt file yet, that's okay
-            currentPrompt = '';
+        }
+        try {
+            const [modelData] = await bucket.file(MODEL_CONFIG_FILE).download();
+            currentModel = modelData.toString().trim();
+        } catch (e) {
+            // No model file yet, use default
         }
 
         const [files] = await bucket.getFiles();
@@ -91,7 +109,7 @@ functions.http('dashboard', async (req, res) => {
         transcripts.sort((a, b) => new Date(b.created) - new Date(a.created));
 
         // Generate HTML
-        const html = generateDashboard(transcripts, currentPrompt);
+        const html = generateDashboard(transcripts, currentPrompt, currentModel);
         res.send(html);
 
     } catch (err) {
@@ -120,7 +138,11 @@ function formatDate(isoString) {
     });
 }
 
-function generateDashboard(transcripts, currentPrompt = '') {
+function generateDashboard(transcripts, currentPrompt = '', currentModel = 'gemini-2.5-flash') {
+    const modelOptions = AVAILABLE_MODELS.map(m =>
+        `<option value="${m.id}" ${m.id === currentModel ? 'selected' : ''}>${m.name} - ${m.description}</option>`
+    ).join('');
+
     const rows = transcripts.map((t, i) => `
         <tr>
             <td>${i + 1}</td>
@@ -228,6 +250,35 @@ function generateDashboard(transcripts, currentPrompt = '') {
             outline: none;
             border-color: #00d4ff;
         }
+        .model-select {
+            width: 100%;
+            background: rgba(0,0,0,0.3);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 8px;
+            padding: 12px 15px;
+            color: #eee;
+            font-size: 0.95rem;
+            margin-bottom: 20px;
+            cursor: pointer;
+        }
+        .model-select:focus {
+            outline: none;
+            border-color: #00d4ff;
+        }
+        .model-select option {
+            background: #1a1a2e;
+            color: #eee;
+        }
+        .settings-row {
+            margin-bottom: 20px;
+        }
+        .settings-label {
+            display: block;
+            color: #ccc;
+            font-size: 0.9rem;
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
         .btn {
             background: linear-gradient(90deg, #00d4ff, #7b2cbf);
             border: none;
@@ -309,10 +360,22 @@ function generateDashboard(transcripts, currentPrompt = '') {
         </header>
 
         <div class="settings-section">
-            <h2>AI Analysis Prompt</h2>
-            <p>Customize the prompt used for AI analysis of your video transcripts. This prompt will be sent to Gemini along with the transcript text.</p>
-            <textarea id="promptInput" class="prompt-textarea" placeholder="Enter your analysis prompt here...&#10;&#10;Example: Summarize this video transcript. Identify the main topics discussed and list any action items mentioned.">${escapeHtml(currentPrompt)}</textarea>
-            <button id="savePromptBtn" class="btn" onclick="savePrompt()">Save Prompt</button>
+            <h2>AI Analysis Settings</h2>
+            <p>Configure the AI model and prompt used for analyzing your video transcripts.</p>
+
+            <div class="settings-row">
+                <label class="settings-label">AI Model</label>
+                <select id="modelSelect" class="model-select">
+                    ${modelOptions}
+                </select>
+            </div>
+
+            <div class="settings-row">
+                <label class="settings-label">Analysis Prompt</label>
+                <textarea id="promptInput" class="prompt-textarea" placeholder="Enter your analysis prompt here...&#10;&#10;Example: Summarize this video transcript. Identify the main topics discussed and list any action items mentioned.">${escapeHtml(currentPrompt)}</textarea>
+            </div>
+
+            <button id="saveSettingsBtn" class="btn" onclick="saveSettings()">Save Settings</button>
             <span id="saveStatus" class="save-status"></span>
         </div>
 
@@ -352,10 +415,11 @@ function generateDashboard(transcripts, currentPrompt = '') {
     </div>
 
     <script>
-        async function savePrompt() {
-            const btn = document.getElementById('savePromptBtn');
+        async function saveSettings() {
+            const btn = document.getElementById('saveSettingsBtn');
             const status = document.getElementById('saveStatus');
             const promptText = document.getElementById('promptInput').value;
+            const modelId = document.getElementById('modelSelect').value;
 
             btn.disabled = true;
             status.textContent = 'Saving...';
@@ -368,8 +432,9 @@ function generateDashboard(transcripts, currentPrompt = '') {
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        action: 'savePrompt',
-                        prompt: promptText
+                        action: 'saveSettings',
+                        prompt: promptText,
+                        model: modelId
                     })
                 });
 
