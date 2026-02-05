@@ -1,0 +1,8 @@
+infra/terraform.tfvars
+infra/terraform.tfstate
+infra/terraform.tfstate.backup
+/infra/.terraform
+infra/.terraform.lock.hcl
+infra/dist/notifier.zip
+infra/dist/transcriber.zip
+*.zip
