@@ -11,15 +11,15 @@ graph TD
     User[User] -->|Upload Video| Drive[Google Drive Folder]
     Scheduler[Cloud Scheduler] -->|Trigger 5min| Poller[Function: Drive Poller]
     Poller -->|Check New Files| Drive
-    Poller -->|Download Video| BucketIn[Bucket: audio-input]
-    Poller -->|Save State| BucketState[Bucket: audio-input (state.json)]
+    Poller -->|Download Video| BucketIn["Bucket: audio-input"]
+    Poller -->|Save State| BucketState["Bucket: audio-input (state.json)"]
     
-    BucketIn -->|Event: New Object| Transcriber[Function: Transcriber]
+    BucketIn -->|Event: New Object| Transcriber["Function: Transcriber"]
     Transcriber -->|Email: Started| Gmail
-    Transcriber -->|Call API| VideoAPI[Video Intelligence API]
-    VideoAPI -->|Output JSON| BucketOut[Bucket: transcripts]
+    Transcriber -->|Call API| VideoAPI["Video Intelligence API"]
+    VideoAPI -->|Output JSON| BucketOut["Bucket: transcripts"]
     
-    BucketOut -->|Event: New Object| Notifier[Function: Notifier]
+    BucketOut -->|Event: New Object| Notifier["Function: Notifier"]
     Notifier -->|Email: Finished + Link| Gmail
 ```
 
