@@ -357,6 +357,7 @@ function generateDashboard(transcripts, currentPrompt = '', currentModel = 'gemi
         <header>
             <h1>Video Transcription Dashboard</h1>
             <p style="color: #888;">Google Drive Automation Pipeline</p>
+            <p style="color: #f59e0b; font-size: 0.85rem; margin-top: 10px;">Max video duration: 3 hours (Video Intelligence API limit)</p>
         </header>
 
         <div class="settings-section">
