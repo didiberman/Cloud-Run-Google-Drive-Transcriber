@@ -12,8 +12,8 @@ const MODEL_CONFIG_FILE = '_config/model.txt';
 const AVAILABLE_MODELS = [
     { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'google', description: 'Fast & cost-effective' },
     { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'google', description: 'Most capable Gemini' },
-    { id: 'claude-sonnet-4@20250514', name: 'Claude Sonnet 4', provider: 'anthropic', description: 'Balanced performance' },
-    { id: 'claude-opus-4@20250115', name: 'Claude Opus 4', provider: 'anthropic', description: 'Most capable Claude' }
+    { id: 'claude-sonnet-4', name: 'Claude Sonnet 4', provider: 'anthropic', description: 'Balanced performance' },
+    { id: 'claude-opus-4', name: 'Claude Opus 4', provider: 'anthropic', description: 'Most capable Claude' }
 ];
 
 // Register HTTP function
