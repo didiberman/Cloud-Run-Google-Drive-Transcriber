@@ -50,6 +50,13 @@ resource "google_storage_bucket" "transcripts_bucket" {
   uniform_bucket_level_access = true
 }
 
+# Grant read access to transcripts bucket for the notification recipient
+resource "google_storage_bucket_iam_member" "transcripts_viewer" {
+  bucket = google_storage_bucket.transcripts_bucket.name
+  role   = "roles/storage.objectViewer"
+  member = "user:${var.gmail_user}"
+}
+
 # ------------------------------------------------------------------------------
 # Service Account for Drive Poller
 # ------------------------------------------------------------------------------

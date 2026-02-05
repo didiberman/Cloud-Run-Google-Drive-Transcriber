@@ -9,6 +9,7 @@ const drive = google.drive({ version: 'v3' });
 const FOLDER_ID = process.env.FOLDER_ID;
 const DEST_BUCKET_NAME = process.env.DEST_BUCKET;
 const STATE_FILE_NAME = 'drive-poller-state.json';
+const MAX_VIDEO_DURATION_MS = 5 * 60 * 60 * 1000; // 5 hours in milliseconds
 
 /**
  * Cloud Function entry point.
@@ -33,13 +34,18 @@ exports.pollDrive = async (req, res) => {
         const lastTime = await getLastCheckTime(DEST_BUCKET_NAME);
         console.log(`Polling for files created after: ${lastTime}`);
 
-        // 3. List Files in Drive
-        // Query: Inside folder AND created > lastTime AND not a folder itself
-        const q = `'${FOLDER_ID}' in parents and createdTime > '${lastTime}' and mimeType contains 'video/' and trashed = false`;
+        // 3. Get all folder IDs (parent + subfolders)
+        const allFolderIds = await getAllFolderIds(FOLDER_ID);
+        console.log(`Monitoring ${allFolderIds.length} folders (including subfolders)`);
+
+        // 4. List Files in Drive from all folders
+        // Build query: (folder1 in parents OR folder2 in parents OR ...) AND video AND created > lastTime
+        const parentQueries = allFolderIds.map(id => `'${id}' in parents`).join(' or ');
+        const q = `(${parentQueries}) and createdTime > '${lastTime}' and mimeType contains 'video/' and trashed = false`;
 
         const listRes = await drive.files.list({
             q: q,
-            fields: 'files(id, name, createdTime, mimeType)',
+            fields: 'files(id, name, createdTime, mimeType, videoMediaMetadata)',
             orderBy: 'createdTime asc' // Oldest first, to keep order
         });
 
@@ -53,11 +59,25 @@ exports.pollDrive = async (req, res) => {
 
         // 4. Process new files
         let newestTime = lastTime;
+        let processedCount = 0;
 
         for (const file of files) {
+            // Check video duration (skip if over 5 hours)
+            const durationMs = file.videoMediaMetadata?.durationMillis;
+            if (durationMs && parseInt(durationMs) > MAX_VIDEO_DURATION_MS) {
+                const durationHours = (parseInt(durationMs) / 3600000).toFixed(1);
+                console.log(`Skipping file "${file.name}" - duration ${durationHours}h exceeds 5h limit`);
+                // Still update newest time so we don't reprocess this file
+                if (new Date(file.createdTime) > new Date(newestTime)) {
+                    newestTime = file.createdTime;
+                }
+                continue;
+            }
+
             console.log(`Processing file: ${file.name} (${file.id})`);
 
             await downloadAndUpload(file.id, file.name, DEST_BUCKET_NAME);
+            processedCount++;
 
             // Update newest time seen
             if (new Date(file.createdTime) > new Date(newestTime)) {
@@ -68,13 +88,40 @@ exports.pollDrive = async (req, res) => {
         // 5. Save State
         await saveLastCheckTime(DEST_BUCKET_NAME, newestTime);
 
-        res.status(200).send(`Processed ${files.length} files.`);
+        const skippedCount = files.length - processedCount;
+        res.status(200).send(`Processed ${processedCount} files${skippedCount > 0 ? `, skipped ${skippedCount} (too long)` : ''}.`);
 
     } catch (err) {
         console.error('Error in pollDrive:', err);
         res.status(500).send(err.message);
     }
 };
+
+/**
+ * Recursively gets all folder IDs (parent + all subfolders).
+ * @param {string} parentFolderId - The root folder ID
+ * @returns {Promise<string[]>} Array of all folder IDs
+ */
+async function getAllFolderIds(parentFolderId) {
+    const allIds = [parentFolderId];
+
+    async function getSubfolders(folderId) {
+        const res = await drive.files.list({
+            q: `'${folderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+            fields: 'files(id, name)',
+        });
+
+        const subfolders = res.data.files || [];
+        for (const folder of subfolders) {
+            allIds.push(folder.id);
+            // Recursively get subfolders
+            await getSubfolders(folder.id);
+        }
+    }
+
+    await getSubfolders(parentFolderId);
+    return allIds;
+}
 
 /**
  * Reads the state file from GCS to get the last checked timestamp.
