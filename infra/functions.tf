@@ -36,7 +36,7 @@ resource "google_cloudfunctions2_function" "drive_poller" {
   service_config {
     max_instance_count = 1
     available_memory   = "256M"
-    timeout_seconds    = 60
+    timeout_seconds    = 3600
     environment_variables = {
       FOLDER_ID   = var.drive_folder_id
       DEST_BUCKET = google_storage_bucket.audio_input_bucket.name
@@ -49,7 +49,7 @@ resource "google_cloudfunctions2_function" "drive_poller" {
 resource "google_cloud_scheduler_job" "poller_trigger" {
   name        = "trigger-drive-poller"
   description = "Triggers the drive poller every 2 mins"
-  schedule    = "*/2 * * * *"
+  schedule    = "*/5 * * * *"
   region      = var.region
 
   http_target {
@@ -162,6 +162,7 @@ resource "google_cloudfunctions2_function" "notifier" {
       INPUT_BUCKET       = google_storage_bucket.audio_input_bucket.name
       FOLDER_ID          = var.drive_folder_id
       GCP_PROJECT        = var.project_id
+      DASHBOARD_URL      = google_cloudfunctions2_function.dashboard.service_config[0].uri
     }
   }
 
@@ -215,6 +216,7 @@ resource "google_cloudfunctions2_function" "dashboard" {
     timeout_seconds    = 60
     environment_variables = {
       TRANSCRIPT_BUCKET  = google_storage_bucket.transcripts_bucket.name
+      INPUT_BUCKET       = google_storage_bucket.audio_input_bucket.name
       DASHBOARD_PASSWORD = var.dashboard_password
     }
     service_account_email = google_service_account.drive_poller_sa.email

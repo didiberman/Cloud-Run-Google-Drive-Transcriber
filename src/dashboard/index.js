@@ -4,6 +4,7 @@ const { Storage } = require('@google-cloud/storage');
 const storage = new Storage();
 
 const TRANSCRIPT_BUCKET = process.env.TRANSCRIPT_BUCKET;
+const INPUT_BUCKET = process.env.INPUT_BUCKET;
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || 'tmptmp123';
 
 const PROMPT_CONFIG_FILE = '_config/prompt.txt';
@@ -42,11 +43,12 @@ functions.http('dashboard', async (req, res) => {
     }
 
     try {
-        if (!TRANSCRIPT_BUCKET) {
-            return res.status(500).send('TRANSCRIPT_BUCKET not configured');
+        if (!TRANSCRIPT_BUCKET || !INPUT_BUCKET) {
+            return res.status(500).send('TRANSCRIPT_BUCKET or INPUT_BUCKET not configured');
         }
 
-        const bucket = storage.bucket(TRANSCRIPT_BUCKET);
+        const transcriptBucket = storage.bucket(TRANSCRIPT_BUCKET);
+        const inputBucket = storage.bucket(INPUT_BUCKET);
 
         // Handle POST request to save settings
         if (req.method === 'POST' && req.body && req.body.action === 'saveSettings') {
@@ -54,8 +56,8 @@ functions.http('dashboard', async (req, res) => {
             const modelId = req.body.model || 'gemini-2.5-flash';
 
             await Promise.all([
-                bucket.file(PROMPT_CONFIG_FILE).save(promptContent, { contentType: 'text/plain; charset=utf-8' }),
-                bucket.file(MODEL_CONFIG_FILE).save(modelId, { contentType: 'text/plain; charset=utf-8' })
+                transcriptBucket.file(PROMPT_CONFIG_FILE).save(promptContent, { contentType: 'text/plain; charset=utf-8' }),
+                transcriptBucket.file(MODEL_CONFIG_FILE).save(modelId, { contentType: 'text/plain; charset=utf-8' })
             ]);
 
             return res.json({ success: true, message: 'Settings saved successfully' });
@@ -65,51 +67,75 @@ functions.http('dashboard', async (req, res) => {
         let currentPrompt = '';
         let currentModel = 'gemini-2.5-flash';
         try {
-            const [promptData] = await bucket.file(PROMPT_CONFIG_FILE).download();
+            const [promptData] = await transcriptBucket.file(PROMPT_CONFIG_FILE).download();
             currentPrompt = promptData.toString();
         } catch (e) {
             // No prompt file yet, that's okay
         }
         try {
-            const [modelData] = await bucket.file(MODEL_CONFIG_FILE).download();
+            const [modelData] = await transcriptBucket.file(MODEL_CONFIG_FILE).download();
             currentModel = modelData.toString().trim();
         } catch (e) {
             // No model file yet, use default
         }
 
-        const [files] = await bucket.getFiles();
+        // Parallel fetch of files from both buckets
+        const [transcriptFiles] = await transcriptBucket.getFiles();
+        const [inputFiles] = await inputBucket.getFiles();
 
-        // Build a set of all file names for quick lookup
-        const fileNames = new Set(files.map(f => f.name));
-
-        // Filter for TRANSCRIPT files only (one entry per video)
+        // --- Process Transcripts (Completed) ---
+        const transcriptMap = new Set(); // Stores "video.mp4" for completed files
         const transcripts = [];
-        for (const file of files) {
+
+        for (const file of transcriptFiles) {
             if (file.name.endsWith('_TRANSCRIPT.txt') && !file.name.startsWith('_config/')) {
-                const [metadata] = await file.getMetadata();
                 // Extract video name: "video.mp4_TRANSCRIPT.txt" -> "video.mp4"
                 const videoName = file.name.replace(/_TRANSCRIPT\.txt$/, '');
+                transcriptMap.add(videoName);
+
                 const jsonName = videoName + '.json';
                 const analysisName = videoName + '_ANALYSIS.txt';
-                const hasAnalysis = fileNames.has(analysisName);
+
+                // Check if analysis exists (sync check against file list would be better but this works for now)
+                // Actually better to build a Set of all files first for O(1) lookups
+                const hasAnalysis = transcriptFiles.some(f => f.name === analysisName);
 
                 transcripts.push({
                     name: file.name,
                     videoName: videoName,
-                    created: metadata.timeCreated,
-                    size: formatBytes(parseInt(metadata.size)),
+                    created: file.metadata.timeCreated,
+                    size: formatBytes(parseInt(file.metadata.size)),
                     transcriptLink: `https://storage.cloud.google.com/${TRANSCRIPT_BUCKET}/${file.name}`,
                     analysisLink: hasAnalysis ? `https://storage.cloud.google.com/${TRANSCRIPT_BUCKET}/${analysisName}` : null,
                     jsonLink: `https://storage.cloud.google.com/${TRANSCRIPT_BUCKET}/${jsonName}`
                 });
             }
         }
-
-        // Sort by date (newest first)
+        // Sort transcripts by date (newest first)
         transcripts.sort((a, b) => new Date(b.created) - new Date(a.created));
 
+
+        // --- Process Pending Files (In Input but not Transcribed) ---
+        const pendingFiles = [];
+        for (const file of inputFiles) {
+            // Ignore state file or hidden files
+            if (file.name === 'drive-poller-state.json' || file.name.startsWith('_')) continue;
+
+            const isTranscribed = transcriptMap.has(file.name);
+            if (!isTranscribed) {
+                pendingFiles.push({
+                    name: file.name,
+                    created: file.metadata.timeCreated,
+                    size: formatBytes(parseInt(file.metadata.size))
+                });
+            }
+        }
+        // Sort pending by date (newest first)
+        pendingFiles.sort((a, b) => new Date(b.created) - new Date(a.created));
+
+
         // Generate HTML
-        const html = generateDashboard(transcripts, currentPrompt, currentModel);
+        const html = generateDashboard(transcripts, pendingFiles, currentPrompt, currentModel);
         res.send(html);
 
     } catch (err) {
@@ -138,12 +164,12 @@ function formatDate(isoString) {
     });
 }
 
-function generateDashboard(transcripts, currentPrompt = '', currentModel = 'gemini-2.5-flash') {
+function generateDashboard(transcripts, pendingFiles, currentPrompt = '', currentModel = 'gemini-2.5-flash') {
     const modelOptions = AVAILABLE_MODELS.map(m =>
         `<option value="${m.id}" ${m.id === currentModel ? 'selected' : ''}>${m.name} - ${m.description}</option>`
     ).join('');
 
-    const rows = transcripts.map((t, i) => `
+    const transcriptRows = transcripts.map((t, i) => `
         <tr>
             <td>${i + 1}</td>
             <td>${escapeHtml(t.videoName)}</td>
@@ -154,6 +180,18 @@ function generateDashboard(transcripts, currentPrompt = '', currentModel = 'gemi
                 ${t.analysisLink ? `&nbsp;|&nbsp;<a href="${t.analysisLink}" target="_blank" style="color: #4ade80;">Analysis</a>` : ''}
                 &nbsp;|&nbsp;
                 <a href="${t.jsonLink}" target="_blank" style="color: #888;">JSON</a>
+            </td>
+        </tr>
+    `).join('');
+
+    const pendingRows = pendingFiles.map((f, i) => `
+        <tr>
+            <td>${i + 1}</td>
+            <td>${escapeHtml(f.name)}</td>
+            <td>${formatDate(f.created)}</td>
+            <td>${f.size}</td>
+            <td>
+                <span class="status-badge processing">Processing</span>
             </td>
         </tr>
     `).join('');
@@ -181,6 +219,7 @@ function generateDashboard(transcripts, currentPrompt = '', currentModel = 'gemi
         .container {
             max-width: 1200px;
             margin: 0 auto;
+            padding-bottom: 60px;
         }
         header {
             text-align: center;
@@ -192,6 +231,13 @@ function generateDashboard(transcripts, currentPrompt = '', currentModel = 'gemi
             background: linear-gradient(90deg, #00d4ff, #7b2cbf);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
+        }
+        h2 {
+            color: #00d4ff;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            padding-bottom: 10px;
         }
         .stats {
             display: flex;
@@ -205,6 +251,7 @@ function generateDashboard(transcripts, currentPrompt = '', currentModel = 'gemi
             padding: 20px 40px;
             text-align: center;
             backdrop-filter: blur(10px);
+            min-width: 200px;
         }
         .stat-number {
             font-size: 2.5rem;
@@ -216,15 +263,18 @@ function generateDashboard(transcripts, currentPrompt = '', currentModel = 'gemi
             color: #aaa;
             margin-top: 5px;
         }
+        .section {
+            margin-bottom: 50px;
+        }
         .settings-section {
             background: rgba(255,255,255,0.08);
             border-radius: 12px;
             padding: 25px;
-            margin-bottom: 40px;
+            margin-bottom: 50px;
             backdrop-filter: blur(10px);
         }
         .settings-section h2 {
-            color: #00d4ff;
+            border-bottom: none;
             margin-bottom: 15px;
             font-size: 1.3rem;
         }
@@ -235,7 +285,7 @@ function generateDashboard(transcripts, currentPrompt = '', currentModel = 'gemi
         }
         .prompt-textarea {
             width: 100%;
-            min-height: 200px;
+            min-height: 150px;
             background: rgba(0,0,0,0.3);
             border: 1px solid rgba(255,255,255,0.2);
             border-radius: 8px;
@@ -341,14 +391,36 @@ function generateDashboard(transcripts, currentPrompt = '', currentModel = 'gemi
         }
         .empty {
             text-align: center;
-            padding: 60px;
+            padding: 40px;
             color: #888;
+            background: rgba(255,255,255,0.02);
+            border-radius: 12px;
         }
         .refresh {
             text-align: center;
-            margin-top: 20px;
+            margin-top: 40px;
             color: #666;
             font-size: 0.85rem;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .status-badge.processing {
+            background: rgba(250, 204, 21, 0.2);
+            color: #facc15;
+            border: 1px solid rgba(250, 204, 21, 0.3);
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 0.7; }
+            50% { opacity: 1; }
+            100% { opacity: 0.7; }
         }
     </style>
 </head>
@@ -357,8 +429,20 @@ function generateDashboard(transcripts, currentPrompt = '', currentModel = 'gemi
         <header>
             <h1>Video Transcription Dashboard</h1>
             <p style="color: #888;">Google Drive Automation Pipeline</p>
-            <p style="color: #f59e0b; font-size: 0.85rem; margin-top: 10px;">Max video duration: 3 hours (Video Intelligence API limit)</p>
+            <p style="margin-top: 10px;"><a href="https://drive.google.com/drive/folders/1SD4_7768gW5fG8QcaPo1qKdgQqZvJItx" target="_blank" style="color: #00d4ff;">📁 Open Monitored Folder</a></p>
+            <p style="color: #f59e0b; font-size: 0.85rem; margin-top: 10px;">Max video duration: 60 minutes (Cloud Run Service limit)</p>
         </header>
+
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-number">${pendingFiles.length}</div>
+                <div class="stat-label">Pending / Processing</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">${transcripts.length}</div>
+                <div class="stat-label">Completed</div>
+            </div>
+        </div>
 
         <div class="settings-section">
             <h2>AI Analysis Settings</h2>
@@ -380,39 +464,57 @@ function generateDashboard(transcripts, currentPrompt = '', currentModel = 'gemi
             <span id="saveStatus" class="save-status"></span>
         </div>
 
-        <div class="stats">
-            <div class="stat-card">
-                <div class="stat-number">${transcripts.length}</div>
-                <div class="stat-label">Total Transcripts</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number">${transcripts.length > 0 ? formatDate(transcripts[0].created).split(',')[0] : 'N/A'}</div>
-                <div class="stat-label">Last Processed</div>
-            </div>
+        <!-- Pending Files Section -->
+        <div class="section">
+            <h2>⏳ Pending / Processing</h2>
+            ${pendingFiles.length === 0 ? `
+                <div class="empty">
+                    <p>No files currently being processed.</p>
+                </div>
+            ` : `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Video Name</th>
+                            <th>Uploaded At</th>
+                            <th>Size</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${pendingRows}
+                    </tbody>
+                </table>
+            `}
         </div>
 
-        ${transcripts.length === 0 ? `
-            <div class="empty">
-                <p>No transcripts yet. Upload a video to your Google Drive folder to get started.</p>
-            </div>
-        ` : `
-            <table>
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Video Name</th>
-                        <th>Processed At</th>
-                        <th>Size</th>
-                        <th>Links</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${rows}
-                </tbody>
-            </table>
-        `}
+        <!-- Completed Files Section -->
+        <div class="section">
+            <h2>✅ Completed Transcripts</h2>
+            ${transcripts.length === 0 ? `
+                <div class="empty">
+                    <p>No completed transcripts yet.</p>
+                </div>
+            ` : `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Video Name</th>
+                            <th>Processed At</th>
+                            <th>Size</th>
+                            <th>Links</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${transcriptRows}
+                    </tbody>
+                </table>
+            `}
+        </div>
 
-        <p class="refresh">Refresh page to see latest transcripts</p>
+        <p class="refresh">Refresh page to see status updates</p>
     </div>
 
     <script>
@@ -463,6 +565,7 @@ function generateDashboard(transcripts, currentPrompt = '', currentModel = 'gemi
 }
 
 function escapeHtml(str) {
+    if (!str) return '';
     return str
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')

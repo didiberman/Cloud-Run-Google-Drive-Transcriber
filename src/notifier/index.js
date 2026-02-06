@@ -143,79 +143,134 @@ functions.cloudEvent('sendNotification', async (cloudEvent) => {
         // 2. Extract Text with Timing (Video Intelligence Format)
         const formattedTranscript = formatTranscript(transcriptData);
         const videoDuration = getVideoDuration(transcriptData);
-        console.log(`Transcript extracted (${formattedTranscript.length} chars), duration: ${videoDuration}`);
 
-        // 2.5 Prepare Content (including optional AI Analysis)
+        let transcriptContent = null;
         let analysisText = null;
+        let subject = `Analysis & Transcript: ${file.name.replace(/\.json$/, '')}`;
+        let emailBody = '';
 
-        // Run Analysis - check GCS config first, then fall back to Google Drive
-        const PROMPT_CONFIG_FILE = '_config/prompt.txt';
-        const MAIN_WATCHED_FOLDER_ID = process.env.FOLDER_ID;
-        const PROMPT_FOLDER_CANDIDATES = ['_prompts', 'THE PROMPT'];
-        const PROMPT_FILE_CANDIDATES = ['PROMPT.md', 'PROMPT.MD', 'prompt.md'];
+        // Check for empty or very short transcript (under 10 words)
+        // We strip timestamps "[0:00 - 0:05]" (approximate check) to count actual speech words
+        const speechOnly = formattedTranscript ? formattedTranscript.replace(/\[\d+:\d+ - \d+:\d+\]/g, '').trim() : '';
+        const wordCount = speechOnly.split(/\s+/).length;
+        const isInsufficient = !formattedTranscript || wordCount < 10;
 
-        try {
-            let promptContent = null;
-            let selectedModel = DEFAULT_MODEL;
+        if (isInsufficient) {
+            console.warn(`Transcript insufficient (${wordCount} words) for ${file.name}. Skipping AI analysis.`);
 
-            // 1. First, try to load settings from GCS (set via dashboard)
+            subject = `Transcript Empty / Failed: ${file.name.replace(/\.json$/, '')}`;
+            emailBody = `Your video "${file.name.replace(/\.json$/, '')}" has been processed.\n\n` +
+                `Video Duration: ${videoDuration}\n\n` +
+                `Status: No significant speech detected (${wordCount} words).\n` +
+                `AI analysis was skipped because there is not enough content to analyze.\n\n` +
+                `This could be because the video is silent, the audio is unclear, or the speech is very brief.`;
+
+            // We still save a "transcript" file effectively saying it failed, so the dashboard shows something
+            transcriptContent = `Video: ${file.name.replace(/\.json$/, '')}\n` +
+                `Duration: ${videoDuration}\n` +
+                `Processed: ${new Date().toISOString()}\n\n` +
+                `═══════════════════════════════════════════════════════\n` +
+                `TRANSCRIPT STATUS: INSUFFICIENT DATA\n` +
+                `═══════════════════════════════════════════════════════\n\n` +
+                `No significant speech detected in this video (${wordCount} words).`;
+
+        } else {
+            console.log(`Transcript extracted (${formattedTranscript.length} chars), duration: ${videoDuration}`);
+
+            // 2.5 Prepare Content (including optional AI Analysis)
+
+            // Run Analysis - check GCS config first, then fall back to Google Drive
+            const PROMPT_CONFIG_FILE = '_config/prompt.txt';
+            const MAIN_WATCHED_FOLDER_ID = process.env.FOLDER_ID;
+            const PROMPT_FOLDER_CANDIDATES = ['_prompts', 'THE PROMPT'];
+            const PROMPT_FILE_CANDIDATES = ['PROMPT.md', 'PROMPT.MD', 'prompt.md'];
+
             try {
-                const [promptData] = await bucket.file(PROMPT_CONFIG_FILE).download();
-                const gcsPrompt = promptData.toString().trim();
-                if (gcsPrompt) {
-                    console.log('Found prompt in GCS config. Using dashboard-configured prompt.');
-                    promptContent = gcsPrompt;
+                let promptContent = null;
+                let selectedModel = DEFAULT_MODEL;
+
+                // 1. First, try to load settings from GCS (set via dashboard)
+                try {
+                    const [promptData] = await bucket.file(PROMPT_CONFIG_FILE).download();
+                    const gcsPrompt = promptData.toString().trim();
+                    if (gcsPrompt) {
+                        console.log('Found prompt in GCS config. Using dashboard-configured prompt.');
+                        promptContent = gcsPrompt;
+                    }
+                } catch (gcsErr) {
+                    // No GCS prompt file, that's okay - fall back to Drive
+                    console.log('No GCS prompt config found, checking Google Drive...');
                 }
-            } catch (gcsErr) {
-                // No GCS prompt file, that's okay - fall back to Drive
-                console.log('No GCS prompt config found, checking Google Drive...');
-            }
 
-            // Load model selection from GCS
-            try {
-                const [modelData] = await bucket.file(MODEL_CONFIG_FILE).download();
-                const gcsModel = modelData.toString().trim();
-                if (gcsModel) {
-                    selectedModel = gcsModel;
-                    console.log(`Using dashboard-configured model: ${selectedModel}`);
+                // Load model selection from GCS
+                try {
+                    const [modelData] = await bucket.file(MODEL_CONFIG_FILE).download();
+                    const gcsModel = modelData.toString().trim();
+                    if (gcsModel) {
+                        selectedModel = gcsModel;
+                        console.log(`Using dashboard-configured model: ${selectedModel}`);
+                    }
+                } catch (modelErr) {
+                    console.log(`No model config found, using default: ${DEFAULT_MODEL}`);
                 }
-            } catch (modelErr) {
-                console.log(`No model config found, using default: ${DEFAULT_MODEL}`);
+
+                // 2. Fall back to Google Drive prompt if GCS is empty
+                if (!promptContent && MAIN_WATCHED_FOLDER_ID) {
+                    console.log(`Searching Google Drive folder: ${MAIN_WATCHED_FOLDER_ID}`);
+                    promptContent = await locatePromptContent(
+                        MAIN_WATCHED_FOLDER_ID,
+                        PROMPT_FOLDER_CANDIDATES,
+                        PROMPT_FILE_CANDIDATES
+                    );
+                } else if (!promptContent && !MAIN_WATCHED_FOLDER_ID) {
+                    console.warn('FOLDER_ID env var not set and no GCS prompt. Skipping AI analysis.');
+                }
+
+                if (promptContent) {
+                    console.log(`Found prompt template. Running AI analysis with ${selectedModel}...`);
+                    analysisText = await analyzeWithModel(formattedTranscript, promptContent, selectedModel);
+                    console.log('AI Analysis complete.');
+                } else {
+                    console.log('No prompt template found. Skipping AI analysis.');
+                }
+            } catch (aiErr) {
+                console.error('Error during AI analysis:', aiErr);
+                analysisText = `[Error during AI Analysis: ${aiErr.message}]`;
             }
 
-            // 2. Fall back to Google Drive prompt if GCS is empty
-            if (!promptContent && MAIN_WATCHED_FOLDER_ID) {
-                console.log(`Searching Google Drive folder: ${MAIN_WATCHED_FOLDER_ID}`);
-                promptContent = await locatePromptContent(
-                    MAIN_WATCHED_FOLDER_ID,
-                    PROMPT_FOLDER_CANDIDATES,
-                    PROMPT_FILE_CANDIDATES
-                );
-            } else if (!promptContent && !MAIN_WATCHED_FOLDER_ID) {
-                console.warn('FOLDER_ID env var not set and no GCS prompt. Skipping AI analysis.');
+            // 3. Prepare Valid Content
+            transcriptContent = `Video: ${file.name.replace(/\.json$/, '')}\n` +
+                `Duration: ${videoDuration}\n` +
+                `Processed: ${new Date().toISOString()}\n\n` +
+                `═══════════════════════════════════════════════════════\n` +
+                `TRANSCRIPT\n` +
+                `═══════════════════════════════════════════════════════\n\n` +
+                `${formattedTranscript}`;
+
+            subject = `[Drive Automation] Analysis & Transcript: ${file.name.replace(/\.json$/, '')}`;
+
+            const gcsLink = `https://storage.cloud.google.com/${process.env.TRANSCRIPT_BUCKET || 'BUCKET_UNKNOWN'}/${file.name}`;
+
+            emailBody = `Your video "${file.name.replace(/\.json$/, '')}" has been processed!\n\n` +
+                `Video Duration: ${videoDuration}\n\n`;
+
+            emailBody += `The transcript and AI analysis are attached to this email.\n\n`;
+
+            if (analysisText) {
+                emailBody += `═══════════════════════════════════════════════════════\n` +
+                    `AI ANALYSIS\n` +
+                    `═══════════════════════════════════════════════════════\n\n` +
+                    `${analysisText}\n\n`;
             }
 
-            if (promptContent) {
-                console.log(`Found prompt template. Running AI analysis with ${selectedModel}...`);
-                analysisText = await analyzeWithModel(formattedTranscript, promptContent, selectedModel);
-                console.log('AI Analysis complete.');
-            } else {
-                console.log('No prompt template found. Skipping AI analysis.');
-            }
-        } catch (aiErr) {
-            console.error('Error during AI analysis:', aiErr);
-            analysisText = `[Error during AI Analysis: ${aiErr.message}]`;
+            emailBody += `═══════════════════════════════════════════════════════\n` +
+                `LINKS\n` +
+                `═══════════════════════════════════════════════════════\n\n` +
+                `Raw JSON: ${gcsLink}\n\n` +
+                `To view the full transcript or analysis, open the attached files.`;
         }
 
-        // 3. Prepare Content
         const transcriptFileName = file.name.replace(/\.json$/, '_TRANSCRIPT.txt');
-        const transcriptContent = `Video: ${file.name.replace(/\.json$/, '')}\n` +
-            `Duration: ${videoDuration}\n` +
-            `Processed: ${new Date().toISOString()}\n\n` +
-            `═══════════════════════════════════════════════════════\n` +
-            `TRANSCRIPT\n` +
-            `═══════════════════════════════════════════════════════\n\n` +
-            `${formattedTranscript}`;
 
         let analysisFileName = null;
         let analysisContent = null;
@@ -248,9 +303,13 @@ functions.cloudEvent('sendNotification', async (cloudEvent) => {
         // 4. Send Notification
         await sendEmailOrSMS(
             file.name, // Original JSON filename for reference
-            videoDuration,
+            subject,
+            emailBody,
             transcriptContent,
-            analysisText
+            transcriptFileName,
+            analysisContent,
+            analysisFileName,
+            selectedModel // Pass the model name
         );
 
         // Mark as notified (idempotency)
@@ -315,7 +374,7 @@ function getVideoDuration(transcriptData) {
  * Formats the Video Intelligence API response into human-readable transcript with timing.
  * Note: The API returns snake_case keys (annotation_results, speech_transcriptions, etc.)
  * @param {Object} transcriptData - The parsed JSON from Video Intelligence API
- * @returns {string} Formatted transcript with timing
+ * @returns {string|null} Formatted transcript with timing, or NULL if empty/failed
  */
 function formatTranscript(transcriptData) {
     const paragraphs = [];
@@ -323,13 +382,13 @@ function formatTranscript(transcriptData) {
     // API uses snake_case: annotation_results
     const annotationResults = transcriptData.annotation_results;
     if (!annotationResults || annotationResults.length === 0) {
-        return 'No transcript data found.';
+        return null;
     }
 
     const annotations = annotationResults[0];
     // API uses snake_case: speech_transcriptions
     if (!annotations.speech_transcriptions || annotations.speech_transcriptions.length === 0) {
-        return 'No speech detected in video.';
+        return null;
     }
 
     for (const transcription of annotations.speech_transcriptions) {
@@ -361,7 +420,7 @@ function formatTranscript(transcriptData) {
     }
 
     if (paragraphs.length === 0) {
-        return 'No transcript content found.';
+        return null;
     }
 
     return paragraphs.join('\n\n');
@@ -395,16 +454,15 @@ function formatTime(time) {
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-async function sendEmailOrSMS(originalFilename, duration, transcriptContent, analysisText) {
+async function sendEmailOrSMS(originalFilename, subject, text, transcriptContent, transcriptFileName, analysisContent, analysisFileName, modelName) {
     const user = process.env.GMAIL_USER;
     const pass = process.env.GMAIL_APP_PASSWORD;
     const to = process.env.NOTIFICATION_EMAIL;
-
-    // Extract video name (remove .json extension)
-    const videoName = originalFilename.replace(/\.json$/, '');
+    const dashboardUrl = process.env.DASHBOARD_URL;
 
     console.log('---------------------------------------------------');
-    console.log(`NOTIFICATION for ${videoName}`);
+    console.log(`NOTIFICATION for ${originalFilename}`);
+    console.log(`SUBJECT: ${subject}`);
     console.log(`TO: ${to || 'Log Only'}`);
     console.log('---------------------------------------------------');
 
@@ -419,52 +477,43 @@ async function sendEmailOrSMS(originalFilename, duration, transcriptContent, ana
         auth: { user, pass }
     });
 
-    const gcsLink = `https://storage.cloud.google.com/${process.env.TRANSCRIPT_BUCKET || 'BUCKET_UNKNOWN'}/${originalFilename}`;
+    // Append Model Info and Dashboard Link
+    let finalText = text;
 
-    let emailBody = `Your video "${videoName}" has been processed!\n\n` +
-        `Video Duration: ${duration}\n\n`;
+    finalText += `\n═══════════════════════════════════════════════════════\n` +
+        `SYSTEM INFO\n` +
+        `═══════════════════════════════════════════════════════\n\n`;
 
-    emailBody += `The transcript and AI analysis are attached to this email.\n\n`;
-
-    if (analysisText) {
-        emailBody += `═══════════════════════════════════════════════════════\n` +
-            `AI ANALYSIS\n` +
-            `═══════════════════════════════════════════════════════\n\n` +
-            `${analysisText}\n\n`;
+    if (modelName) {
+        finalText += `AI Model used: ${modelName}\n`;
     }
 
-    emailBody += `═══════════════════════════════════════════════════════\n` +
-        `LINKS\n` +
-        `═══════════════════════════════════════════════════════\n\n` +
-        `Raw JSON: ${gcsLink}\n\n` +
-        `To view the full transcript or analysis, open the attached files.`;
+    if (dashboardUrl) {
+        finalText += `Dashboard: ${dashboardUrl}\n`;
+    } else {
+        finalText += `Dashboard: (URL not configured)\n`;
+    }
 
     // Attachments
     const attachments = [];
-    if (transcriptContent) {
+    if (transcriptContent && transcriptFileName) {
         attachments.push({
-            filename: `${videoName}_TRANSCRIPT.txt`,
+            filename: transcriptFileName,
             content: transcriptContent
         });
     }
-    if (analysisText) {
-        // Re-create proper analysis content for attachment consistency
-        const analysisFileContent = `Video: ${videoName}\n` +
-            `Duration: ${duration}\n` +
-            `Processed: ${new Date().toISOString()}\n\n` +
-            `AI ANALYSIS\n\n${analysisText}`;
-
+    if (analysisContent && analysisFileName) {
         attachments.push({
-            filename: `${videoName}_ANALYSIS.txt`,
-            content: analysisFileContent
+            filename: analysisFileName,
+            content: analysisContent
         });
     }
 
     await transporter.sendMail({
         from: user,
         to: to,
-        subject: `[Drive Automation] Analysis & Transcript: ${videoName}`,
-        text: emailBody,
+        subject: subject,
+        text: finalText,
         attachments: attachments
     });
 }
