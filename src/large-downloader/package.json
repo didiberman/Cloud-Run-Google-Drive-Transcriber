@@ -1,0 +1,16 @@
+{
+    "name": "drive-large-downloader",
+    "version": "1.0.0",
+    "description": "Cloud Run Job to download large files from Google Drive to GCS",
+    "main": "index.js",
+    "scripts": {
+        "start": "node index.js"
+    },
+    "dependencies": {
+        "@google-cloud/storage": "^7.7.0",
+        "googleapis": "^129.0.0"
+    },
+    "engines": {
+        "node": ">=22.0.0"
+    }
+}

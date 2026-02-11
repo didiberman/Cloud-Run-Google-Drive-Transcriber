@@ -94,6 +94,13 @@ resource "google_project_iam_member" "storage_admin" {
   member  = "serviceAccount:${google_service_account.drive_poller_sa.email}"
 }
 
+# Allow the SA to act as itself (Required for Cloud Run Jobs triggered by the SA)
+resource "google_service_account_iam_member" "sa_user_self" {
+  service_account_id = google_service_account.drive_poller_sa.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.drive_poller_sa.email}"
+}
+
 # Fix for "Failed to update storage bucket metadata"
 # The GCS Service Agent needs permission to publish to Pub/Sub for Eventarc
 data "google_storage_project_service_account" "gcs_account" {
@@ -103,4 +110,14 @@ resource "google_project_iam_member" "gcs_pubsub_publisher" {
   project = var.project_id
   role    = "roles/pubsub.publisher"
   member  = "serviceAccount:${data.google_storage_project_service_account.gcs_account.email_address}"
+}
+
+# ------------------------------------------------------------------------------
+# Artifact Registry (for Cloud Run Job images)
+# ------------------------------------------------------------------------------
+resource "google_artifact_registry_repository" "repo" {
+  location      = var.region
+  repository_id = "drive-automation-repo"
+  description   = "Docker repository for Drive Automation images"
+  format        = "DOCKER"
 }

@@ -1,0 +1,62 @@
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0* Host drive-poller-mzu6ibk3kq-uc.a.run.app:443 was resolved.
+* IPv6: (none)
+* IPv4: 34.143.77.2, 34.143.78.2, 34.143.73.2, 34.143.76.2, 34.143.79.2, 34.143.75.2, 34.143.72.2, 34.143.74.2
+*   Trying 34.143.77.2:443...
+* Connected to drive-poller-mzu6ibk3kq-uc.a.run.app (34.143.77.2) port 443
+* ALPN: curl offers h2,http/1.1
+* (304) (OUT), TLS handshake, Client hello (1):
+} [341 bytes data]
+*  CAfile: /etc/ssl/cert.pem
+*  CApath: none
+* (304) (IN), TLS handshake, Server hello (2):
+{ [122 bytes data]
+* (304) (IN), TLS handshake, Unknown (8):
+{ [15 bytes data]
+* (304) (IN), TLS handshake, Certificate (11):
+{ [6494 bytes data]
+* (304) (IN), TLS handshake, CERT verify (15):
+{ [79 bytes data]
+* (304) (IN), TLS handshake, Finished (20):
+{ [36 bytes data]
+* (304) (OUT), TLS handshake, Finished (20):
+} [36 bytes data]
+* SSL connection using TLSv1.3 / AEAD-CHACHA20-POLY1305-SHA256 / [blank] / UNDEF
+* ALPN: server accepted h2
+* Server certificate:
+*  subject: CN=*.a.run.app
+*  start date: Jan 19 08:36:41 2026 GMT
+*  expire date: Apr 13 08:36:40 2026 GMT
+*  subjectAltName: host "drive-poller-mzu6ibk3kq-uc.a.run.app" matched cert's "*.a.run.app"
+*  issuer: C=US; O=Google Trust Services; CN=WR2
+*  SSL certificate verify ok.
+* using HTTP/2
+* [HTTP/2] [1] OPENED stream for https://drive-poller-mzu6ibk3kq-uc.a.run.app/?backfill=true&hours=48
+* [HTTP/2] [1] [:method: POST]
+* [HTTP/2] [1] [:scheme: https]
+* [HTTP/2] [1] [:authority: drive-poller-mzu6ibk3kq-uc.a.run.app]
+* [HTTP/2] [1] [:path: /?backfill=true&hours=48]
+* [HTTP/2] [1] [user-agent: curl/8.7.1]
+* [HTTP/2] [1] [accept: */*]
+* [HTTP/2] [1] [authorization: Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6ImMyN2JhNDBiMDk1MjlhZDRmMTY4MjJjZTgzMTY3YzFiYzM5MTAxMjIiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20iLCJhenAiOiIzMjU1NTk0MDU1OS5hcHBzLmdvb2dsZXVzZXJjb250ZW50LmNvbSIsImF1ZCI6IjMyNTU1OTQwNTU5LmFwcHMuZ29vZ2xldXNlcmNvbnRlbnQuY29tIiwic3ViIjoiMTA5NjIyMTkwNDU4NjU1ODM3MjgzIiwiZW1haWwiOiJ5YWRpZGJAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsImF0X2hhc2giOiJQTUI4Z1hBWUpEajZfc2x1MmNhNWtnIiwiaWF0IjoxNzcwNzIwMTE1LCJleHAiOjE3NzA3MjM3MTV9.reqWYlQC899kig2SrAFL9dANIYbnurqb8i6vV7X_--9XvTUZ_21G1zKJ47huXb8oX6CrFxYGlXWC1TmN-UrTfJ1ZuJzVDM8Gtqmj9f3daozZ-ATlS_kJ7kZ1YiOqVD8xOp5JrGj98XDICTJM7a48lVj76i3yjxwemy93IcKHlabLGC6teI2tEbODn3sAeKNcetOb8SJeTHFEhqr0K_qHGh9_zj-HPHxpWh9uBW-VbxOUCXh7Ih-9OKuTuF2OfAk9eFRJpd1mRoa6ftyCiifB06yRp0lRSLfqYUo-XGg1FhouHOQRo63t-cU6BsK4cev94B46fLNFsk0zztRGNUQO7g]
+> POST /?backfill=true&hours=48 HTTP/2
+> Host: drive-poller-mzu6ibk3kq-uc.a.run.app
+> User-Agent: curl/8.7.1
+> Accept: */*
+> Authorization: Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6ImMyN2JhNDBiMDk1MjlhZDRmMTY4MjJjZTgzMTY3YzFiYzM5MTAxMjIiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20iLCJhenAiOiIzMjU1NTk0MDU1OS5hcHBzLmdvb2dsZXVzZXJjb250ZW50LmNvbSIsImF1ZCI6IjMyNTU1OTQwNTU5LmFwcHMuZ29vZ2xldXNlcmNvbnRlbnQuY29tIiwic3ViIjoiMTA5NjIyMTkwNDU4NjU1ODM3MjgzIiwiZW1haWwiOiJ5YWRpZGJAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsImF0X2hhc2giOiJQTUI4Z1hBWUpEajZfc2x1MmNhNWtnIiwiaWF0IjoxNzcwNzIwMTE1LCJleHAiOjE3NzA3MjM3MTV9.reqWYlQC899kig2SrAFL9dANIYbnurqb8i6vV7X_--9XvTUZ_21G1zKJ47huXb8oX6CrFxYGlXWC1TmN-UrTfJ1ZuJzVDM8Gtqmj9f3daozZ-ATlS_kJ7kZ1YiOqVD8xOp5JrGj98XDICTJM7a48lVj76i3yjxwemy93IcKHlabLGC6teI2tEbODn3sAeKNcetOb8SJeTHFEhqr0K_qHGh9_zj-HPHxpWh9uBW-VbxOUCXh7Ih-9OKuTuF2OfAk9eFRJpd1mRoa6ftyCiifB06yRp0lRSLfqYUo-XGg1FhouHOQRo63t-cU6BsK4cev94B46fLNFsk0zztRGNUQO7g
+> 
+* Request completely sent off
+  0     0    0     0    0     0      0      0 --:--:--  0:00:01 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:02 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:03 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:04 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:05 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:06 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:07 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:08 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:09 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:10 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:11 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:12 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:13 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:14 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:15 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:16 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:17 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:18 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:19 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:20 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:21 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:22 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:23 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:24 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:25 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:26 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:27 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:28 --:--:--     0< HTTP/2 500 
+< content-type: text/html; charset=utf-8
+< x-cloud-trace-context: e438e40798b9c4d94fc9621bdf5d2836
+< date: Tue, 10 Feb 2026 10:42:24 GMT
+< server: Google Frontend
+< content-length: 411
+< alt-svc: h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+< 
+{ [411 bytes data]
+100   411  100   411    0     0     14      0  0:00:29  0:00:28  0:00:01    86100   411  100   411    0     0     14      0  0:00:29  0:00:28  0:00:01   109
+* Connection #0 to host drive-poller-mzu6ibk3kq-uc.a.run.app left intact
+Invalid JSON payload received. Unknown name "overrides[containerOverrides][env][name]": Cannot bind query parameter. Field 'overrides[containerOverrides][env][name]' could not be found in request message.
+Invalid JSON payload received. Unknown name "overrides[containerOverrides][env][value]": Cannot bind query parameter. Field 'overrides[containerOverrides][env][value]' could not be found in request message.

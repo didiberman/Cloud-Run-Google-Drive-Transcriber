@@ -146,6 +146,7 @@ functions.cloudEvent('sendNotification', async (cloudEvent) => {
 
         let transcriptContent = null;
         let analysisText = null;
+        let selectedModel = DEFAULT_MODEL; // Declare here so it's accessible in all code paths
         let subject = `Analysis & Transcript: ${file.name.replace(/\.json$/, '')}`;
         let emailBody = '';
 
@@ -187,7 +188,7 @@ functions.cloudEvent('sendNotification', async (cloudEvent) => {
 
             try {
                 let promptContent = null;
-                let selectedModel = DEFAULT_MODEL;
+                selectedModel = DEFAULT_MODEL; // Reset to default, may be overridden below
 
                 // 1. First, try to load settings from GCS (set via dashboard)
                 try {

@@ -38,8 +38,9 @@ resource "google_cloudfunctions2_function" "drive_poller" {
     available_memory   = "256M"
     timeout_seconds    = 3600
     environment_variables = {
-      FOLDER_ID   = var.drive_folder_id
-      DEST_BUCKET = google_storage_bucket.audio_input_bucket.name
+      FOLDER_ID               = var.drive_folder_id
+      DEST_BUCKET             = google_storage_bucket.audio_input_bucket.name
+      LARGE_DOWNLOAD_JOB_NAME = google_cloud_run_v2_job.large_downloader.id # Resource ID: projects/*/locations/*/jobs/*
     }
     service_account_email = google_service_account.drive_poller_sa.email
   }
