@@ -9,6 +9,7 @@ const run = google.run({ version: 'v2' });
 // Environment Variables
 const FOLDER_ID = process.env.FOLDER_ID;
 const DEST_BUCKET_NAME = process.env.DEST_BUCKET;
+const TRANSCRIPT_BUCKET_NAME = process.env.TRANSCRIPT_BUCKET;
 const STATE_FILE_NAME = 'drive-poller-state.json';
 const MAX_VIDEO_DURATION_MS = 3 * 60 * 60 * 1000; // 3 hours (Video Intelligence API max)
 const LARGE_FILE_THRESHOLD_BYTES = 1024 * 1024 * 1024; // 1 GB
@@ -76,8 +77,21 @@ exports.pollDrive = async (req, res) => {
         let newestTime = lastTime;
         let processedCount = 0;
         let triggeredJobsCount = 0;
+        let skippedUploadInProgress = 0;
+        let oldestSkippedTime = null; // Track earliest skipped file so we don't advance past it
 
         for (const file of files) {
+            // Skip files still being uploaded (size is 0 or missing)
+            if (!file.size || parseInt(file.size) === 0) {
+                console.log(`Skipping file "${file.name}" - size is 0 or missing (upload likely still in progress)`);
+                skippedUploadInProgress++;
+                // Track the oldest skipped file so we don't advance newestTime past it
+                if (!oldestSkippedTime || new Date(file.createdTime) < new Date(oldestSkippedTime)) {
+                    oldestSkippedTime = file.createdTime;
+                }
+                continue;
+            }
+
             // Check video duration (skip if over 3 hours)
             const durationMs = file.videoMediaMetadata?.durationMillis;
             if (durationMs && parseInt(durationMs) > MAX_VIDEO_DURATION_MS) {
@@ -88,6 +102,19 @@ exports.pollDrive = async (req, res) => {
                     newestTime = file.createdTime;
                 }
                 continue;
+            }
+
+            // Skip if already processed (transcript JSON exists in transcripts bucket)
+            if (TRANSCRIPT_BUCKET_NAME) {
+                const transcriptJsonName = `${file.name}.json`;
+                const [exists] = await storage.bucket(TRANSCRIPT_BUCKET_NAME).file(transcriptJsonName).exists();
+                if (exists) {
+                    console.log(`Skipping "${file.name}" - already processed (${transcriptJsonName} exists)`);
+                    if (new Date(file.createdTime) > new Date(newestTime)) {
+                        newestTime = file.createdTime;
+                    }
+                    continue;
+                }
             }
 
             console.log(`Processing file: ${file.name} (${file.id}) - Size: ${file.size} bytes`);
@@ -112,11 +139,23 @@ exports.pollDrive = async (req, res) => {
             }
         }
 
+        // Don't advance newestTime past files that were skipped due to upload-in-progress,
+        // otherwise they'd never be retried on the next poll
+        if (oldestSkippedTime && new Date(newestTime) >= new Date(oldestSkippedTime)) {
+            // Roll back to just before the oldest skipped file so it's included in the next query
+            const rollbackTime = new Date(new Date(oldestSkippedTime).getTime() - 1000).toISOString();
+            console.log(`Rolling back newestTime from ${newestTime} to ${rollbackTime} to retry ${skippedUploadInProgress} file(s) still uploading`);
+            newestTime = rollbackTime;
+        }
+
         // 5. Save State
         await saveLastCheckTime(DEST_BUCKET_NAME, newestTime);
 
-        const skippedCount = files.length - processedCount;
-        res.status(200).send(`Processed ${processedCount} files (${triggeredJobsCount} via Job)${skippedCount > 0 ? `, skipped ${skippedCount}` : ''}.`);
+        const skippedCount = files.length - processedCount - skippedUploadInProgress;
+        let statusMsg = `Processed ${processedCount} files (${triggeredJobsCount} via Job)`;
+        if (skippedUploadInProgress > 0) statusMsg += `, ${skippedUploadInProgress} still uploading (will retry)`;
+        if (skippedCount > 0) statusMsg += `, skipped ${skippedCount}`;
+        res.status(200).send(statusMsg + '.');
 
     } catch (err) {
         console.error('Error in pollDrive:', err);

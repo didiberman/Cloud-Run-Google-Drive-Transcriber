@@ -132,6 +132,25 @@ functions.cloudEvent('sendNotification', async (cloudEvent) => {
         const [metadata] = await transcriptFile.getMetadata();
         if (metadata.metadata && metadata.metadata.notificationSent) {
             console.log(`Skipping already-notified file: ${file.name}`);
+
+            // Check for potential leftover source file and clean it up if it exists
+            // This handles cases where the function succeeded (sent email) but failed/timed out before cleanup
+            if (INPUT_BUCKET) {
+                const originalFileName = file.name.replace(/\.json$/, '');
+                try {
+                    const inputBucket = storage.bucket(INPUT_BUCKET);
+                    const inputFile = inputBucket.file(originalFileName);
+                    const [exists] = await inputFile.exists();
+
+                    if (exists) {
+                        console.log(`[Idempotency Check] Found leftover source file: ${originalFileName}. Cleaning up...`);
+                        await inputFile.delete();
+                        console.log(`[Idempotency Check] Cleaned up source file: ${originalFileName}`);
+                    }
+                } catch (cleanupErr) {
+                    console.warn(`[Idempotency Check] Failed to cleanup source file ${originalFileName}:`, cleanupErr.message);
+                }
+            }
             return;
         }
 
@@ -301,17 +320,26 @@ functions.cloudEvent('sendNotification', async (cloudEvent) => {
             console.log(`Saved analysis to GCS: ${analysisFileName}`);
         }
 
-        // 4. Send Notification
-        await sendEmailOrSMS(
-            file.name, // Original JSON filename for reference
-            subject,
-            emailBody,
-            transcriptContent,
-            transcriptFileName,
-            analysisContent,
-            analysisFileName,
-            selectedModel // Pass the model name
-        );
+        // Drive upload disabled - SA can't upload to personal Drive (no storage quota).
+        // Re-enable when folder is moved to a Shared Drive.
+        // const MAIN_FOLDER_ID = process.env.FOLDER_ID;
+        // if (MAIN_FOLDER_ID) { ... }
+
+        // 4. Send Notification (skip email for failed/empty transcripts)
+        if (!isInsufficient) {
+            await sendEmailOrSMS(
+                file.name, // Original JSON filename for reference
+                subject,
+                emailBody,
+                transcriptContent,
+                transcriptFileName,
+                analysisContent,
+                analysisFileName,
+                selectedModel // Pass the model name
+            );
+        } else {
+            console.log(`Skipping email for insufficient transcript: ${file.name}`);
+        }
 
         // Mark as notified (idempotency)
         await transcriptFile.setMetadata({
@@ -610,7 +638,7 @@ async function findPromptFile(folderId, fileNames) {
     // Ensure the global Drive client is authenticated (ADC handles credentials in Cloud Functions)
 
     const auth = new google.auth.GoogleAuth({
-        scopes: ['https://www.googleapis.com/auth/drive.readonly']
+        scopes: ['https://www.googleapis.com/auth/drive']
     });
     const authClient = await auth.getClient();
     google.options({ auth: authClient });
@@ -670,7 +698,7 @@ async function findSubfolderId(parentFolderId, subfolderName) {
     }
 
     const auth = new google.auth.GoogleAuth({
-        scopes: ['https://www.googleapis.com/auth/drive.readonly']
+        scopes: ['https://www.googleapis.com/auth/drive']
     });
     const authClient = await auth.getClient();
     google.options({ auth: authClient });
@@ -692,6 +720,78 @@ async function findSubfolderId(parentFolderId, subfolderName) {
         console.warn(`Error searching for subfolder '${subfolderName}' in ${parentFolderId}:`, err.message);
         return null;
     }
+}
+
+/**
+ * Finds or creates the "AUTO AI ANALYSIS" folder inside the given parent folder.
+ * @param {string} parentFolderId - The parent Drive folder ID
+ * @returns {Promise<string>} The folder ID of the analysis folder
+ */
+async function getWritableDriveClient() {
+    const auth = new google.auth.GoogleAuth({
+        scopes: ['https://www.googleapis.com/auth/drive']
+    });
+    const authClient = await auth.getClient();
+    return google.drive({ version: 'v3', auth: authClient });
+}
+
+async function findOrCreateAnalysisFolder(parentFolderId) {
+    const ANALYSIS_FOLDER_NAME = 'AUTO AI ANALYSIS';
+    const writeDrive = await getWritableDriveClient();
+
+    // Check if folder already exists
+    try {
+        const listRes = await writeDrive.files.list({
+            q: `'${parentFolderId}' in parents and name = '${ANALYSIS_FOLDER_NAME}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+            fields: 'files(id, name)',
+            pageSize: 1
+        });
+        if (listRes.data.files && listRes.data.files.length > 0) {
+            const existingId = listRes.data.files[0].id;
+            console.log(`Found existing "${ANALYSIS_FOLDER_NAME}" folder: ${existingId}`);
+            return { folderId: existingId, driveClient: writeDrive };
+        }
+    } catch (err) {
+        console.warn(`Error checking for existing folder: ${err.message}`);
+    }
+
+    // Create the folder
+    console.log(`Creating "${ANALYSIS_FOLDER_NAME}" folder in ${parentFolderId}...`);
+    const res = await writeDrive.files.create({
+        requestBody: {
+            name: ANALYSIS_FOLDER_NAME,
+            mimeType: 'application/vnd.google-apps.folder',
+            parents: [parentFolderId]
+        },
+        fields: 'id'
+    });
+
+    console.log(`Created "${ANALYSIS_FOLDER_NAME}" folder: ${res.data.id}`);
+    return { folderId: res.data.id, driveClient: writeDrive };
+}
+
+/**
+ * Uploads a text file to a Google Drive folder.
+ * @param {object} driveClient - Authenticated Drive client with write scope
+ * @param {string} folderId - The destination Drive folder ID
+ * @param {string} fileName - The name for the file in Drive
+ * @param {string} content - The text content to upload
+ */
+async function uploadFileToDrive(driveClient, folderId, fileName, content) {
+    const res = await driveClient.files.create({
+        requestBody: {
+            name: fileName,
+            parents: [folderId]
+        },
+        media: {
+            mimeType: 'text/plain',
+            body: Readable.from([content])
+        },
+        fields: 'id, name'
+    });
+
+    console.log(`Uploaded to Drive: ${res.data.name} (${res.data.id})`);
+    return res.data.id;
 }
 
 // Export functions for testing

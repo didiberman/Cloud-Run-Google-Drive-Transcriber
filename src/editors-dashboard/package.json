@@ -1,0 +1,13 @@
+{
+  "name": "editors-dashboard",
+  "version": "1.0.0",
+  "description": "Public dashboard for video editors to access transcripts and AI analysis",
+  "main": "index.js",
+  "scripts": {
+    "start": "functions-framework --target=editorsDashboard"
+  },
+  "dependencies": {
+    "@google-cloud/functions-framework": "^3.0.0",
+    "@google-cloud/storage": "^7.0.0"
+  }
+}

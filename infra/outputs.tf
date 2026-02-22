@@ -7,3 +7,8 @@ output "dashboard_url" {
   value       = google_cloudfunctions2_function.dashboard.service_config[0].uri
   description = "URL of the private dashboard (requires Google login)"
 }
+
+output "editors_dashboard_url" {
+  value       = google_cloudfunctions2_function.editors_dashboard.service_config[0].uri
+  description = "URL of the public editors dashboard (no password required)"
+}

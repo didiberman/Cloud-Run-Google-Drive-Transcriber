@@ -35,11 +35,12 @@ resource "google_cloudfunctions2_function" "drive_poller" {
 
   service_config {
     max_instance_count = 1
-    available_memory   = "256M"
+    available_memory   = "512M"
     timeout_seconds    = 3600
     environment_variables = {
       FOLDER_ID               = var.drive_folder_id
       DEST_BUCKET             = google_storage_bucket.audio_input_bucket.name
+      TRANSCRIPT_BUCKET       = google_storage_bucket.transcripts_bucket.name
       LARGE_DOWNLOAD_JOB_NAME = google_cloud_run_v2_job.large_downloader.id # Resource ID: projects/*/locations/*/jobs/*
     }
     service_account_email = google_service_account.drive_poller_sa.email
@@ -165,6 +166,7 @@ resource "google_cloudfunctions2_function" "notifier" {
       GCP_PROJECT        = var.project_id
       DASHBOARD_URL      = google_cloudfunctions2_function.dashboard.service_config[0].uri
     }
+    service_account_email = google_service_account.drive_poller_sa.email
   }
 
   event_trigger {
@@ -228,6 +230,57 @@ resource "google_cloudfunctions2_function" "dashboard" {
 resource "google_cloud_run_service_iam_member" "dashboard_invoker" {
   location = var.region
   service  = google_cloudfunctions2_function.dashboard.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+
+# ------------------------------------------------------------------------------
+# 5. Editors Dashboard (Public, no auth)
+# ------------------------------------------------------------------------------
+
+data "archive_file" "editors_dashboard_zip" {
+  type        = "zip"
+  source_dir  = "${path.module}/../src/editors-dashboard"
+  output_path = "${path.module}/dist/editors-dashboard.zip"
+}
+
+resource "google_storage_bucket_object" "editors_dashboard_zip" {
+  name   = "editors-dashboard-${data.archive_file.editors_dashboard_zip.output_md5}.zip"
+  bucket = google_storage_bucket.source_bucket.name
+  source = data.archive_file.editors_dashboard_zip.output_path
+}
+
+resource "google_cloudfunctions2_function" "editors_dashboard" {
+  name        = "editors-dashboard"
+  location    = var.region
+  description = "Public dashboard for video editors to access transcripts and AI analysis"
+
+  build_config {
+    runtime     = "nodejs22"
+    entry_point = "editorsDashboard"
+    source {
+      storage_source {
+        bucket = google_storage_bucket.source_bucket.name
+        object = google_storage_bucket_object.editors_dashboard_zip.name
+      }
+    }
+  }
+
+  service_config {
+    max_instance_count = 2
+    available_memory   = "256M"
+    timeout_seconds    = 60
+    environment_variables = {
+      TRANSCRIPT_BUCKET = google_storage_bucket.transcripts_bucket.name
+    }
+    service_account_email = google_service_account.drive_poller_sa.email
+  }
+}
+
+# IAM: Allow public access (no password required)
+resource "google_cloud_run_service_iam_member" "editors_dashboard_invoker" {
+  location = var.region
+  service  = google_cloudfunctions2_function.editors_dashboard.name
   role     = "roles/run.invoker"
   member   = "allUsers"
 }
